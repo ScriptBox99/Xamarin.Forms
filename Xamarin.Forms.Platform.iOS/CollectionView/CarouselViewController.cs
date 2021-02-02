@@ -1,9 +1,6 @@
 ﻿using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Collections.Specialized;
-using System.Linq;
-using System.Threading.Tasks;
 using CoreGraphics;
 using Foundation;
 using UIKit;
@@ -21,6 +18,7 @@ namespace Xamarin.Forms.Platform.iOS
 		int _gotoPosition = -1;
 		CGSize _size;
 		ILoopItemsViewSource LoopItemsSource => ItemsSource as ILoopItemsViewSource;
+		bool _isDragging;
 
 		public CarouselViewController(CarouselView itemsView, ItemsViewLayout layout) : base(itemsView, layout)
 		{
@@ -35,12 +33,18 @@ namespace Xamarin.Forms.Platform.iOS
 		public override UICollectionViewCell GetCell(UICollectionView collectionView, NSIndexPath indexPath)
 		{
 			UICollectionViewCell cell;
+
 			if (Carousel?.Loop == true && _carouselViewLoopManager != null)
 			{
 				var cellAndCorrectedIndex = _carouselViewLoopManager.GetCellAndCorrectIndex(collectionView, indexPath, DetermineCellReuseId());
 				cell = cellAndCorrectedIndex.cell;
 				var correctedIndexPath = NSIndexPath.FromRowSection(cellAndCorrectedIndex.correctedIndex, 0);
-				UpdateTemplatedCell(cell as TemplatedCell, correctedIndexPath);
+
+				if (cell is DefaultCell defaultCell)
+					UpdateDefaultCell(defaultCell, correctedIndexPath);
+
+				if (cell is TemplatedCell templatedCell)
+					UpdateTemplatedCell(templatedCell, correctedIndexPath);
 			}
 			else
 			{
@@ -48,8 +52,10 @@ namespace Xamarin.Forms.Platform.iOS
 			}
 
 			var element = (cell as TemplatedCell)?.VisualElementRenderer?.Element;
+
 			if (element != null)
 				VisualStateManager.GoToState(element, CarouselView.DefaultItemVisualState);
+
 			return cell;
 		}
 
@@ -78,12 +84,14 @@ namespace Xamarin.Forms.Platform.iOS
 				_updatingScrollOffset = false;
 			}
 
-			UpdateInitialPosition();
-
 			if (CollectionView.Bounds.Size != _size)
 			{
 				_size = CollectionView.Bounds.Size;
 				BoundsSizeChanged();
+			}
+			else
+			{
+				UpdateInitialPosition();
 			}
 		}
 
@@ -95,12 +103,14 @@ namespace Xamarin.Forms.Platform.iOS
 
 		public override void DraggingStarted(UIScrollView scrollView)
 		{
+			_isDragging = true;
 			Carousel.SetIsDragging(true);
 		}
 
 		public override void DraggingEnded(UIScrollView scrollView, bool willDecelerate)
 		{
 			Carousel.SetIsDragging(false);
+			_isDragging = false;
 		}
 
 		public override void UpdateItemsSource()
@@ -109,6 +119,13 @@ namespace Xamarin.Forms.Platform.iOS
 			base.UpdateItemsSource();
 			//we don't need to Subscribe because base calls CreateItemsViewSource
 			_carouselViewLoopManager?.SetItemsSource(LoopItemsSource);
+
+			if (_initialPositionSet)
+			{
+				Carousel.SetValueFromRenderer(CarouselView.CurrentItemProperty, null);
+				Carousel.SetValueFromRenderer(CarouselView.PositionProperty, 0);
+			}
+
 			_initialPositionSet = false;
 			UpdateInitialPosition();
 		}
@@ -137,6 +154,12 @@ namespace Xamarin.Forms.Platform.iOS
 			_carouselViewLoopManager?.SetItemsSource(itemsSource);
 			SubscribeCollectionItemsSourceChanged(itemsSource);
 			return itemsSource;
+		}
+
+		protected override void CacheCellAttributes(NSIndexPath indexPath, CGSize size)
+		{
+			var itemIndex = GetIndexFromIndexPath(indexPath);
+			base.CacheCellAttributes(NSIndexPath.FromItemSection(itemIndex, 0), size);
 		}
 
 		internal void TearDown()
@@ -171,34 +194,49 @@ namespace Xamarin.Forms.Platform.iOS
 			if (_updatingScrollOffset)
 				return;
 
+			if (_isDragging)
+			{
+				return;
+			}
+
 			SetPosition(e.CenterItemIndex);
 
 			UpdateVisualStates();
 		}
 
-		void CollectionItemsSourceChanged(object sender, NotifyCollectionChangedEventArgs e)
+		int _positionAfterUpdate = -1;
+
+		void CollectionViewUpdating(object sender, NotifyCollectionChangedEventArgs e)
 		{
 			int carouselPosition = Carousel.Position;
-			int newPosition = carouselPosition;
+			_positionAfterUpdate = carouselPosition;
 			var currentItemPosition = ItemsSource.GetIndexForItem(Carousel.CurrentItem).Row;
 			var count = ItemsSource.ItemCount;
 
 			if (e.Action == NotifyCollectionChangedAction.Remove)
-				newPosition = GetPositionWhenRemovingItems(e.OldStartingIndex, carouselPosition, currentItemPosition, count);
+				_positionAfterUpdate = GetPositionWhenRemovingItems(e.OldStartingIndex, carouselPosition, currentItemPosition, count);
 
 			if (e.Action == NotifyCollectionChangedAction.Reset)
-				newPosition = GetPositionWhenResetItems();
+				_positionAfterUpdate = GetPositionWhenResetItems();
 
 			if (e.Action == NotifyCollectionChangedAction.Add)
-				newPosition = GetPositionWhenAddingItems(carouselPosition, currentItemPosition);
+				_positionAfterUpdate = GetPositionWhenAddingItems(carouselPosition, currentItemPosition);
+		}
+
+		void CollectionViewUpdated(object sender, NotifyCollectionChangedEventArgs e)
+		{
+			if (_positionAfterUpdate == -1)
+			{
+				return;
+			}
 
 			_gotoPosition = -1;
 
-			if (count > 0)
-				ScrollToPosition(newPosition, carouselPosition, false);
+			var targetPosition = _positionAfterUpdate;
+			_positionAfterUpdate = -1;
 
-			SetCurrentItem(newPosition);
-			SetPosition(newPosition);
+			SetPosition(targetPosition);
+			SetCurrentItem(targetPosition);
 		}
 
 		int GetPositionWhenAddingItems(int carouselPosition, int currentItemPosition)
@@ -233,22 +271,25 @@ namespace Xamarin.Forms.Platform.iOS
 				carouselPosition = currentItemPosition;
 			}
 
-			if (removingCurrentElement)
-				CollectionView.ReloadItems(CollectionView.IndexPathsForVisibleItems);
-
 			return carouselPosition;
 		}
 
 		void SubscribeCollectionItemsSourceChanged(IItemsViewSource itemsSource)
 		{
 			if (itemsSource is ObservableItemsSource newItemsSource)
-				newItemsSource.CollectionItemsSourceChanged += CollectionItemsSourceChanged;
+			{
+				newItemsSource.CollectionViewUpdating += CollectionViewUpdating;
+				newItemsSource.CollectionViewUpdated += CollectionViewUpdated;
+			}
 		}
 
 		void UnsubscribeCollectionItemsSourceChanged(IItemsViewSource oldItemsSource)
 		{
 			if (oldItemsSource is ObservableItemsSource oldObservableItemsSource)
-				oldObservableItemsSource.CollectionItemsSourceChanged -= CollectionItemsSourceChanged;
+			{
+				oldObservableItemsSource.CollectionViewUpdating -= CollectionViewUpdating;
+				oldObservableItemsSource.CollectionViewUpdated -= CollectionViewUpdated;
+			}
 		}
 
 		void CarouselViewPropertyChanged(object sender, System.ComponentModel.PropertyChangedEventArgs changedProperty)
@@ -317,7 +358,7 @@ namespace Xamarin.Forms.Platform.iOS
 
 		void UpdateFromCurrentItem()
 		{
-			if (Carousel?.CurrentItem == null || ItemsSource?.ItemCount == 0)
+			if (Carousel?.CurrentItem == null || ItemsSource == null || ItemsSource.ItemCount == 0)
 				return;
 
 			var currentItemPosition = GetIndexForItem(Carousel.CurrentItem).Row;
@@ -537,7 +578,7 @@ namespace Xamarin.Forms.Platform.iOS
 			var centerOffsetY = (LoopCount * contentHeight - boundsHeight) / 2;
 			var distFromCenter = centerOffsetY - currentOffset.Y;
 
-			if (Math.Abs(distFromCenter) > (contentHeight / 4))
+			if (Math.Abs(distFromCenter) > (contentHeight / GetMinLoopCount()))
 			{
 				var cellcount = distFromCenter / (cellHeight + cellPadding);
 				var shiftCells = (int)((cellcount > 0) ? Math.Floor(cellcount) : Math.Ceiling(cellcount));
@@ -563,14 +604,14 @@ namespace Xamarin.Forms.Platform.iOS
 			var currentOffset = collectionView.ContentOffset;
 			var contentWidth = GetTotalContentWidth();
 			var boundsWidth = collectionView.Bounds.Size.Width;
-
+			
 			if (contentWidth == 0 || cellWidth == 0)
 				return;
 
 			var centerOffsetX = (LoopCount * contentWidth - boundsWidth) / 2;
 			var distFromCentre = centerOffsetX - currentOffset.X;
 
-			if (Math.Abs(distFromCentre) > (contentWidth / 4))
+			if (Math.Abs(distFromCentre) > (contentWidth / GetMinLoopCount()))
 			{
 				var cellcount = distFromCentre / (cellWidth + cellPadding);
 				var shiftCells = (int)((cellcount > 0) ? Math.Floor(cellcount) : Math.Ceiling(cellcount));
@@ -618,6 +659,8 @@ namespace Xamarin.Forms.Platform.iOS
 			var centerIndexPath = collectionView.IndexPathForItemAtPoint(centerPoint);
 			return centerIndexPath;
 		}
+
+		int GetMinLoopCount() => Math.Min(LoopCount, GetItemsSourceCount());
 
 		int GetItemsSourceCount() => _itemsSource.ItemCount;
 

@@ -25,7 +25,7 @@ namespace Xamarin.Forms.Platform.Android
 		{
 			_shellContext = shellContext;
 
-			ShellController.StructureChanged += OnShellStructureChanged;
+			ShellController.FlyoutItemsChanged += OnFlyoutItemsChanged;
 
 			_listItems = GenerateItemList();
 			_selectedCallback = selectedCallback;
@@ -62,6 +62,16 @@ namespace Xamarin.Forms.Platform.Android
 			_templateMap[id] = template;
 
 			return id;
+		}
+
+		public override void OnViewRecycled(Java.Lang.Object holder)
+		{
+			if (holder is ElementViewHolder evh)
+			{
+				evh.Element = null;
+			}
+
+			base.OnViewRecycled(holder);
 		}
 
 		public override void OnBindViewHolder(RecyclerView.ViewHolder holder, int position)
@@ -197,7 +207,7 @@ namespace Xamarin.Forms.Platform.Android
 			return result;
 		}
 
-		protected virtual void OnShellStructureChanged(object sender, EventArgs e)
+		protected virtual void OnFlyoutItemsChanged(object sender, EventArgs e)
 		{
 			var newListItems = GenerateItemList();
 
@@ -217,7 +227,7 @@ namespace Xamarin.Forms.Platform.Android
 
 			if (disposing)
 			{
-				((IShellController)Shell).StructureChanged -= OnShellStructureChanged;
+				((IShellController)Shell).FlyoutItemsChanged -= OnFlyoutItemsChanged;
 
 				_elementViewHolder?.Dispose();
 
@@ -279,6 +289,7 @@ namespace Xamarin.Forms.Platform.Android
 					if (_element == value)
 						return;
 
+					_shell.RemoveLogicalChild(View);
 					if (_element != null && _element is BaseShellItem)
 					{
 						_element.ClearValue(Platform.RendererProperty);
@@ -287,12 +298,12 @@ namespace Xamarin.Forms.Platform.Android
 
 					_element = value;
 
-					// Set Parent after binding context so parent binding context doesn't propagate to view
+					// Set binding context before calling AddLogicalChild so parent binding context doesn't propagate to view
 					View.BindingContext = value;
-					View.Parent = _shell;
 
 					if (_element != null)
 					{
+						_shell.AddLogicalChild(View);
 						FastRenderers.AutomationPropertiesProvider.AccessibilitySettingsChanged(_itemView, value);
 						_element.SetValue(Platform.RendererProperty, _itemView);
 						_element.PropertyChanged += OnElementPropertyChanged;

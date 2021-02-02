@@ -435,9 +435,9 @@ namespace Xamarin.Forms
 			};
 
 			BindToTemplatedParent(frame, BackgroundColorProperty, Frame.BorderColorProperty, HorizontalOptionsProperty,
-				MarginProperty, OpacityProperty, RotationProperty, ScaleProperty, ScaleXProperty, ScaleYProperty, 
+				MarginProperty, OpacityProperty, RotationProperty, ScaleProperty, ScaleXProperty, ScaleYProperty,
 				TranslationYProperty, TranslationXProperty, VerticalOptionsProperty);
-	
+
 			var grid = new Grid
 			{
 				RowSpacing = 0,
@@ -477,8 +477,8 @@ namespace Xamarin.Forms
 
 			var contentPresenter = new ContentPresenter
 			{
-				HorizontalOptions = LayoutOptions.Center,
-				VerticalOptions = LayoutOptions.Center
+				HorizontalOptions = LayoutOptions.Fill,
+				VerticalOptions = LayoutOptions.Fill
 			};
 
 			contentPresenter.SetBinding(MarginProperty, new Binding("Padding", source: RelativeBindingSource.TemplatedParent));
